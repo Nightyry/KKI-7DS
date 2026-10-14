@@ -1,0 +1,44 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+// Наша база данных карт (из Шага 2)
+var CardDatabase = make(map[int]Card)
+
+func InitDatabase() {
+	// Карта Алчности за 1 ману
+	CardDatabase[2] = Card{
+		ID:          2,
+		Name:        "Дьявольский заём",
+		ManaCost:    1,
+		Type:        Minion, // Сделаем существом для теста статов в Unity
+		Class:       Greed,
+		Rarity:      Common,
+		Attack:      3,
+		Health:      2,
+		Description: "Вы получаете 2 маны на этом ходу. На следующем ходу: Долг: 2 маны.",
+	}
+}
+
+// Обработчик сетевого запроса от Unity
+func getCardsHandler(w http.ResponseWriter, r *http.Request) {
+	// Указываем, что отправляем данные в формате JSON
+	w.Header().Set("Content-Type", "application/json")
+	
+	// Превращаем нашу карту в текст (JSON) и отправляем в Unity
+	json.NewEncoder(w).Encode(CardDatabase[2]) 
+}
+
+func main() {
+	InitDatabase()
+
+	// Регистрируем сетевой адрес "http://localhost:8080/getcard"
+	http.HandleFunc("/getcard", getCardsHandler)
+
+	fmt.Println("Сервер ККИ запущен на порту :8080...")
+	http.ListenAndServe(":8080", nil)
+}

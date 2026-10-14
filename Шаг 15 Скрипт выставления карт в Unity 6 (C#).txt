@@ -1,0 +1,98 @@
+using UnityEngine;
+using UnityEngine.EventSystems; // Модуль Unity для отслеживания мыши/касаний
+using System.Collections;
+
+public class CardPlacementController : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+{
+    [Header("Сетевые контроллеры")]
+    public TurnControllerUI turnController; // Ссылка на контроллер маны и ходов из Шага 14
+
+    private Vector3 originalPosition; // Позиция карты в руке до перетаскивания
+    private Transform originalParent;   // Родное окно руки (чтобы вернуть карту обратно, если не хватило маны)
+    private CanvasGroup canvasGroup;
+
+    // Данные этой конкретной карты (загруженные из Шага 3/4)
+    private int cardManaCost = 2; // Для теста выставим 2 маны (в игре берется из структуры CardData)
+    private string cardType = "Minion"; 
+
+    private void Awake()
+    {
+        // Добавляем компонент для корректного перетаскивания через интерфейс
+        canvasGroup = gameObject.GetComponent<CanvasGroup>();
+        if (canvasGroup == null) canvasGroup = gameObject.AddComponent<CanvasGroup>();
+    }
+
+    // Срабатывает в момент, когда игрок зажал карту мылом/пальцем и начал движение
+    public void OnBeginDrag(PointerEventData eventData)
+    {
+        originalPosition = transform.position;
+        originalParent = transform.parent;
+
+        // Делаем карту временно "прозрачной" для лучей мыши, чтобы Unity могла нащупать игровое поле под ней
+        canvasGroup.blocksRaycasts = false;
+        
+        // Выносим карту на самый передний план экрана во время перетаскивания
+        transform.SetParent(transform.root);
+    }
+
+    // Срабатывает каждый кадр, пока игрок тащит карту по экрану
+    public void OnDrag(PointerEventData eventData)
+    {
+        // Карта плавно следует за курсором мыши или пальцем
+        transform.position = Camera.main.ScreenToWorldPoint(new Vector3(eventData.position.x, eventData.position.y, 10f));
+    }
+
+    // Срабатывает в момент, когда игрок отпустил карту
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        canvasGroup.blocksRaycasts = true;
+
+        // 1. Проверяем базовое правило ККИ: можно ли сейчас ходить?
+        // (Для теста симулируем проверку маны. В реальной игре мы парсим текущую ману из TurnControllerUI)
+        int currentAvailableMana = 4; // Симуляция: у игрока сейчас 4 маны
+        bool isMyTurn = true;         // Симуляция: сейчас наш ход
+
+        // Ищем под курсором объект с тегом "BattleField" (Игровое поле боя)
+        bool droppedOnField = false;
+        RaycastHit2D hit = Physics2D.Raycast(Camera.main.ScreenToWorldPoint(eventData.position), Vector2.zero);
+        if (hit.collider != null && hit.collider.CompareTag("BattleField"))
+        {
+            droppedOnField = true;
+        }
+
+        // 2. УСЛОВИЕ УСПЕШНОГО ВЫСТАВЛЕНИЯ: Наш ход + хватает маны + бросили на поле
+        if (isMyTurn && currentAvailableMana >= cardManaCost && droppedOnField)
+        {
+            // Карта успешно разыграна!
+            Debug.Log($"🎉 Карту '{gameObject.name}' выставили на стол за {cardManaCost} маны.");
+            
+            // Фиксируем карту на поле боя
+            transform.SetParent(hit.transform); 
+            transform.localPosition = Vector3.zero; // Сбрасываем координаты в центр ячейки поля
+
+            // Накладываем статус "Сон" на существо (визуально можно затемнить карту)
+            ApplySummoningSickness();
+
+            // В реальной игре здесь вызывается вычитание маны: 
+            // turnController.SpendMana(cardManaCost);
+            // И посылается пакет на Go-сервер: "Игрок Х сыграл карту ID на поле"
+        }
+        else
+        {
+            // ЕСЛИ УСЛОВИЯ НЕ ВЫПОЛНЕНЫ (нет маны, чужой ход или бросил мимо):
+            // Возвращаем карту обратно в руку игрока на её законное место
+            Debug.LogWarning("❌ Невозможно разыграть карту: не ваш ход, мало маны или неверная цель!");
+            transform.SetParent(originalParent);
+            transform.position = originalPosition;
+        }
+    }
+
+    private void ApplySummoningSickness()
+    {
+        // Существо "спит" в первый ход. Подкрасим карту в фиолетовый оттенок мистики пороков
+        SpriteRenderer renderer = GetComponent<SpriteRenderer>();
+        if (renderer != null) renderer.color = new Color(0.7f, 0.5f, 0.8f);
+    }
+}
+
+Как это настроить в редакторе Unity:Создай на игровой сцене спрайт, растяни его и назови BattleField (Игровое поле). Присвой ему тег "BattleField" и добавь компонент BoxCollider2D.Повесь скрипт CardPlacementController на свой префаб карты.Теперь запусти игру. Возьми карту мышкой и перетащи её на поле. Если условия соблюдены — она намертво прилипнет к полю и окрасится в фиолетовый цвет сна. Если попробуешь бросить её мимо поля — она плавно отлетит обратно в руку!Мы реализовали фундаментальную тактильную механику любой ККИ — розыгрыш карт с проверкой игровых правил.

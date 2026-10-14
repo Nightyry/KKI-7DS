@@ -1,0 +1,101 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"sync"
+)
+
+// Добавляем мьютекс для безопасной одновременной записи файлов разными игроками
+var fileMutex sync.Mutex
+
+// Путь к файлу, где будут храниться карты игроков
+const StorageFile = "user_cards.json"
+
+// Обработчик сетевого запроса от Unity на создание карты
+func createCardHandler(w http.ResponseWriter, r *http.Request) {
+	// Разрешаем запросы только методом POST (отправка данных)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var newCard Card
+
+	// 1. Декодируем пришедший от Unity JSON в структуру карты
+	err := json.NewDecoder(r.Body).Decode(&newCard)
+	if err != nil {
+		http.Error(w, "Неверный формат данных: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 2. Серверная проверка баланса (Защита от читеров)
+	// Проверяем базовое правило: Атака + ХП не должны дико превышать бюджет маны
+	allowedBudget := (newCard.ManaCost * 2) + 1
+	if newCard.ManaCost == 0 {
+		allowedBudget = 2
+	}
+	
+	currentWeight := newCard.Attack + newCard.Health
+
+	// Если вес карты больше бюджета + 2 (желтая зона), сервер жестко бракует запрос
+	if currentWeight > (allowedBudget + 2) {
+		http.Error(w, "Ошибка безопасности: Попытка загрузить несбалансированную карту (Имбу)!", http.StatusForbidden)
+		fmt.Printf("⚠️ Заблокирована попытка читерства! Карта: %s [%d/%d за %d маны]\n", newCard.Name, newCard.Attack, newCard.Health, newCard.ManaCost)
+		return
+	}
+
+	// 3. Блокируем файл для записи, чтобы избежать сбоев (Thread Safety)
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	// 4. Читаем уже существующие карты игроков из файла
+	var existingCards []Card
+	fileData, err := os.ReadFile(StorageFile)
+	
+	// Если файл существует и не пустой — расшифровываем его список
+	if err == nil && len(fileData) > 0 {
+		json.Unmarshal(fileData, &existingCards)
+	}
+
+	// 5. Генерируем уникальный ID для новой карты
+	newCard.ID = 1000 + len(existingCards) + 1 // Карты игроков будут иметь ID от 1001 и далее
+	
+	// Добавляем новую карту в список
+	existingCards = append(existingCards, newCard)
+
+	// 6. Записываем обновленный список карт обратно в файл user_cards.json
+	updatedData, err := json.MarshalIndent(existingCards, "", "  ")
+	if err != nil {
+		http.Error(w, "Ошибка сохранения на сервере", http.StatusInternalServerError)
+		return
+	}
+
+	err = os.WriteFile(StorageFile, updatedData, 0644)
+	if err != nil {
+		http.Error(w, "Ошибка записи на диск", http.StatusInternalServerError)
+		return
+	}
+
+	// 7. Отвечаем Unity, что карта успешно сохранена
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(fmt.Sprintf(`{"status":"success","message":"Карта '%s' успешно отправлена на модерацию!","assigned_id":%d}`, newCard.Name, newCard.ID)))
+	
+	fmt.Printf("✅ Карта успешно создана игроком и сохранена! ID: %d, Имя: %s\n", newCard.ID, newCard.Name)
+}
+
+// Регистрируем новый адрес в функции main()
+func SetupRoutes() {
+	InitDatabase()
+	
+	// Старый роут из Шага 4 для получения тестовой карты
+	http.HandleFunc("/getcard", getCardsHandler)
+	
+	// НОВЫЙ роут для создания карт из Мастерской
+	http.HandleFunc("/createcard", createCardHandler)
+	
+	fmt.Println("Сервер ККИ запущен на порту :8080...")
+	http.ListenAndServe(":8080", nil)
+}

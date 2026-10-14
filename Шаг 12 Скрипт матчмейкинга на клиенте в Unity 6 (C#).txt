@@ -1,0 +1,154 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using UnityEngine.Networking;
+using System.Collections;
+
+public class PvPMatchmakerUI : MonoBehaviour
+{
+    [Header("UI Элементы Окна Поиска")]
+    public Button playButton;             // Кнопка "В бой!"
+    public Button cancel // Кнопка "Отмена"
+    public GameObject searchPanel;        // Панель ожидания (где крутится таймер)
+    public TextMeshProUGUI timerText;     // Текст таймера (например, "Поиск: 00:14")
+    public TextMeshProUGUI statusText;    // Текст статуса ("Ищем равного соперника...")
+
+    [Header("Данные Игрока (Тест)")]
+    public string localPlayerID = "Gamer_X"; // В будущем подгружается при логине
+    public int localPlayerMMR = 1500;       // Текущий рейтинг игрока
+
+    private bool isSearching = false;
+    private float searchStartTime;
+    private string serverUrlJoin = "http://localhost:8080/join_queue";
+    private string serverUrlCheck = "http://localhost:8080/check_match"; // Роут проверки статуса
+
+    // Вспомогательная структура для отправки данных на Go
+    [System.Serializable]
+    private struct QueuePayload
+    {
+        public string player_id;
+        public int mmr;
+    }
+
+    // Структура ответа сервера
+    [System.Serializable]
+    private struct ServerResponse
+    {
+        public string status;
+        public string match_id;
+    }
+
+    private void Start()
+    {
+        playButton.onClick.AddListener(StartMatchmaking);
+        searchPanel.SetActive(false);
+    }
+
+    private void Update()
+    {
+        // Если идет поиск, обновляем таймер на экране
+        if (isSearching)
+        {
+            float elapsed = Time.time - searchStartTime;
+            int minutes = Mathf.FloorToInt(elapsed / 60);
+            int seconds = Mathf.FloorToInt(elapsed % 60);
+            timerText.text = string.Format("Поиск: {0:00}:{1:00}", minutes, seconds);
+
+            // Меняем текст статуса со временем, подсказывая игроку, что диапазон MMR расширяется
+            if (seconds > 10 && seconds <= 20)
+                statusText.text = "Расширяем границы поиска...";
+            else if (seconds > 20)
+                statusText.text = "Ищем любого свободного противника...";
+        }
+    }
+
+    public void StartMatchmaking()
+    {
+        isSearching = true;
+        searchStartTime = Time.time;
+        playButton.interactable = false;
+        searchPanel.SetActive(true);
+
+        StartCoroutine(SendJoinQueueRequest());
+    }
+
+    // 1. Посылаем запрос на вход в очередь
+    IEnumerator SendJoinQueueRequest()
+    {
+        QueuePayload payload = new QueuePayload { player_id = localPlayerID, mmr = localPlayerMMR };
+        string json = JsonUtility.ToJson(payload);
+
+        using (UnityWebRequest request = new UnityWebRequest(serverUrlJoin, "POST"))
+        {
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                // Успешно встали в очередь. Запускаем циклическую проверку готовности матча
+                StartCoroutine(CheckMatchStatusLoop());
+            }
+            else
+            {
+                Debug.LogError("Не удалось встать в очередь: " + request.error);
+                StopSearch();
+            }
+        }
+    }
+
+    // 2. Фоновый цикл: каждые 2 секунды спрашиваем сервер, готов ли матч
+    IEnumerator CheckMatchStatusLoop()
+    {
+        while (isSearching)
+        {
+            yield return new WaitForSeconds(2f);
+
+            // Посылаем GET запрос, передавая наш ID в параметрах ссылки
+            string checkUrl = $"{serverUrlCheck}?player_id={localPlayerID}";
+
+            using (UnityWebRequest request = UnityWebRequest.Get(checkUrl))
+            {
+                yield return request.SendWebRequest();
+
+                if (request.result == UnityWebRequest.Result.Success)
+                {
+                    ServerResponse response = JsonUtility.FromJson<ServerResponse>(request.downloadHandler.text);
+
+                    // Если сервер ответил, что матч сформирован
+                    if (response.status == "matched")
+                    {
+                        isSearching = false;
+                        statusText.text = "<color=green>Матч найден!</color>";
+                        Debug.Log($"⚔️ Входим в игру! ID матча: {response.match_id}");
+                        
+                        // Останавливаем корутину и вызываем загрузку боевой сцены
+                        yield return new WaitForSeconds(1.5f);
+                        LoadBattleScene(response.match_id);
+                        yield break;
+                    }
+                }
+            }
+        }
+    }
+
+    private void LoadBattleScene(string matchID)
+    {
+        // Сюда пишется логика переключения сцены Unity
+        // Например: UnityEngine.SceneManagement.SceneManager.LoadScene("BattleField");
+        searchPanel.SetActive(false);
+        Debug.Log("Сцена боя успешно загружена. Передаем ID сессии: " + matchID);
+    }
+
+    public void StopSearch()
+    {
+        isSearching = false;
+        playButton.interactable = true;
+        searchPanel.SetActive(false);
+        StopAllCoroutines();
+        // В реальном проекте тут также посылается запрос на сервер Go "http://localhost:8080/leave_queue"
+    }
+}

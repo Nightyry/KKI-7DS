@@ -1,0 +1,44 @@
+using UnityEngine;
+using UnityEngine.Networking; // Модуль Unity для работы с сетью
+using System.Collections;
+
+public class NetworkManager : MonoBehaviour
+{
+    // Ссылка на скрипт визуализатора, который мы создали в Шаге 3
+    public CardVisualizer cardVisualizer; 
+
+    void Start()
+    {
+        // При старте игры запускаем скачивание карты с сервера
+        StartCoroutine(DownloadCardFromServer());
+    }
+
+    IEnumerator DownloadCardFromServer()
+    {
+        string url = "http://localhost:8080/getcard";
+
+        // Посылаем запрос на сервер Go
+        using (UnityWebRequest webRequest = UnityWebRequest.Get(url))
+        {
+            // Ждем, пока сервер ответит
+            yield return webRequest.SendWebRequest();
+
+            if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
+            {
+                Debug.LogError("Ошибка сети: " + webRequest.error);
+            }
+            else
+            {
+                // Сервер ответил успешно! Забираем текст (JSON)
+                string jsonResponse = webRequest.downloadHandler.text;
+                Debug.Log("Данные получены от Go: " + jsonResponse);
+
+                // Превращаем текст сервера в понятную для Unity структуру C#
+                CardVisualizer.CardData downloadedCard = JsonUtility.FromJson<CardVisualizer.CardData>(jsonResponse);
+
+                // Передаем данные в наш визуализатор, чтобы карта "ожила" на экране!
+                cardVisualizer.SetupCard(downloadCard);
+            }
+        }
+    }
+}

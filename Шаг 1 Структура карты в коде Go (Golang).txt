@@ -1,0 +1,38 @@
+package main
+
+// Описание редкости карты
+type Rarity string
+const (
+    Common    Rarity = "Common"    // Обычная
+    Rare      Rarity = "Rare"      // Редкая
+    Epic      Rarity = "Epic"      // Эпическая
+    Legendary Rarity = "Legendary" // Легендарная
+)
+
+// Описание класса (Греха) карты
+type CardClass string
+const (
+    Neutral CardClass = "Neutral" // Внеклассовая (общая)
+    Greed   CardClass = "Greed"   // Алчность
+    Envy    CardClass = "Envy"    // Зависть
+)
+
+// Описание типа карты
+type CardType string
+const (
+    Minion) CardType = "Minion" // Существо
+    Spell  CardType = "Spell"  // Заклинание
+)
+
+// Главная структура карты
+type Card struct {
+    ID          int       `json:"id"`          // Уникальный номер карты (например, 101)
+    Name        string    `json:"name"`        // Название карты
+    ManaCost    int       `json:"mana_cost"`   // Стоимость в мане (от 0 до 10)
+    Type        CardType  `json:"type"`        // Существо или Заклинание
+    Class       CardClass `json:"class"`       // Нейтральная, Алчность или Зависть
+    Rarity      Rarity    `json:"rarity"`      // Редкость карты
+    Attack      int       `json:"attack"`      // Атака (0 для заклинаний)
+    Health      int       `json:"health"`      // Здоровье (0 для заклинаний)
+    Description string    `json:"description"` // Текст эффекта для игрока
+}

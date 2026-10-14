@@ -1,0 +1,149 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
+// Структура игрока в очереди подбора
+type PlayerInQueue struct {
+	ID        string    `json:"player_id"`
+	MMR       int       `json:"mmr"`
+	JoinTime  time.Time // Время входа в очередь (нужно для расширения диапазона)
+}
+
+// Структура созданного матча
+type Match struct {
+	MatchID string `json:"match_id"`
+	Player1 string `json:"player_1"`
+	Player2 string `json:"player_2"`
+}
+
+// Глобальная очередь игроков и мьютекс для безопасности потоков
+var (
+	lobbyMutex sync.Mutex
+	MatchQueue []PlayerInQueue
+	ActiveMatches = make(map[string]Match) // Хранилище запущенных игр
+)
+
+// Обработчик кнопки "В бой" из Unity (HTTP POST)
+func joinQueueHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var player PlayerInQueue
+	err := json.NewDecoder(r.Body).Decode(&player)
+	if err != nil {
+		http.Error(w, "Ошибка данных", http.StatusBadRequest)
+		return
+	}
+
+	player.JoinTime = time.Now()
+
+	lobbyMutex.Lock()
+	// Проверяем, нет ли игрока уже в очереди, чтобы избежать дубликатов
+	for _, p := range MatchQueue {
+		if p.ID == player.ID {
+			lobbyMutex.Unlock()
+			w.Write([]byte(`{"status":"already_in_queue"}`))
+			return
+		}
+	}
+	// Добавляем игрока в глобальную очередь
+	MatchQueue = append(MatchQueue, player)
+	lobbyMutex.Unlock()
+
+	fmt.Printf("🎯 Игрок %s (MMR: %d) встал в очередь PvP\n", player.ID, player.MMR)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"searching"}`))
+}
+
+// Фоновый цикл матчмейкинга. Сервер запускает его ОДИН раз при старте.
+func StartMatchmakingLoop() {
+	go func() {
+		for {
+			// Проверяем очередь каждые 2 секунды
+			time.Sleep(2 * time.Second)
+
+			lobbyMutex.Lock()
+			if len(MatchQueue) < 2 {
+				lobbyMutex.Unlock()
+				continue
+			}
+
+			// Ищем пары
+			matchedIndices := make(map[int]bool)
+
+			for i := 0; i < len(MatchQueue); i++ {
+				if matchedIndices[i] {
+					continue
+				}
+
+				for j := i + 1; j < len(MatchQueue); j++ {
+					if matchedIndices[j] {
+						continue
+					}
+
+					p1 := MatchQueue[i]
+					p2 := MatchQueue[j]
+
+					// 1. Считаем, сколько времени каждый игрок уже ждет (в секундах)
+					wait1 := int(time.Since(p1.JoinTime).Seconds())
+					wait2 := int(time.Since(p2.JoinTime).Seconds())
+
+					// 2. Высчитываем персональный допустимый шаг расширения MMR (например, +20 MMR за каждую секунду ожидания)
+					// Минимальный порог разницы — 50 MMR, растет со временем ожидания
+					range1 := 50 + (wait1 * 20)
+					range2 := 50 + (wait2 * 20)
+
+					// Берем максимальный диапазон среди двоих
+					allowedDiff := range1
+					if range2 > range1 {
+						allowedDiff = range2
+					}
+
+					// 3. Считаем реальную разницу в рейтинге между ними
+					mmrDiff := p1.MMR - p2.MMR
+					if mmrDiff < 0 {
+						mmrDiff = -mmrDiff
+					}
+
+					// Если разница укладывается в расширившиеся рамки — создаем матч!
+					if mmrDiff <= allowedDiff {
+						matchedIndices[i] = true
+						matchedIndices[j] = true
+
+						matchID := fmt.Sprintf("match_%d_%s", time.Now().Unix(), p1.ID)
+						newMatch := Match{
+							MatchID: matchID,
+							Player1: p1.ID,
+							Player2: p2.ID,
+						}
+
+						ActiveMatches[p1.ID] = newMatch
+						ActiveMatches[p2.ID] = newMatch
+
+						fmt.Printf("⚔️  МАТЧ СОЗДАН! %s (MMR %d) против %s (MMR %d). Разница MMR: %d, Допустимая: %d\n", 
+							p1.ID, p1.MMR, p2.ID, p2.MMR, mmrDiff, allowedDiff)
+						break
+					}
+				}
+			}
+
+			// Удаляем счастливчиков, нашедших игру, из очереди поиска
+			var newQueue []PlayerInQueue
+			for idx, p := range MatchQueue {
+				if !matchedIndices[idx] {
+					newQueue = append(newQueue, p)
+				}
+			}
+			MatchQueue = newQueue
+			lobbyMutex.Unlock()
+		}
+	}()
+}

@@ -1,0 +1,109 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using UnityEngine.Networking;
+using System.Collections;
+
+public class TurnControllerUI : MonoBehaviour
+{
+    [Header("UI Компоненты")]
+    public Button endTurnButton;          // Ссылка на саму UI-кнопку "Конец хода"
+    public TextMeshProUGUI buttonText;    // Текст внутри кнопки ("ХОД ВРАГА" / "КОНЕЦ ХОДА")
+    public TextMeshProUGUI manaText;      // Отображение маны на экране (например, "4 / 4")
+
+    [Header("Параметры сессии матча")]
+    public string currentMatchID = "match_123"; // Получаем от матчмейкера из Шага 12
+    public string localPlayerID = "Gamer_X";   // ID текущего игрока
+
+    private bool isMyTurn = false;
+    private string serverUrlEndTurn = "http://localhost:8080/end_turn";
+
+    // Структура для отправки JSON-запроса на Go
+    [System.Serializable]
+    private struct EndTurnPayload
+    {
+        public string match_id;
+        public string player_id;
+    }
+
+    private void Start()
+    {
+        // Привязываем клик по кнопке к функции OnEndTurnClicked
+        endTurnButton.onClick.AddListener(OnEndTurnClicked);
+        
+        // Стартовое состояние (для теста выставим, что сейчас ход игрока)
+        SetTurnState(true, 1, 1);
+    }
+
+    /// <summary>
+    /// Функция переключения визуального состояния кнопки в зависимости от того, чей сейчас ход
+    /// </summary>
+    public void SetTurnState(bool myTurn, int currentMana, int maxMana)
+    {
+        isMyTurn = myTurn;
+        manaText.text = $"{currentMana} / {maxMana}";
+
+        if (isMyTurn)
+        {
+            endTurnButton.interactable = true;
+            buttonText.text = "КОНЕЦ ХОДА";
+            endTurnButton.image.color = new Color(0.2f, 0.6f, 0.2f); // Зеленая кнопка, когда можно ходить
+        }
+        else
+        {
+            endTurnButton.interactable = false;
+            buttonText.text = "ХОД ВРАГА";
+            endTurnButton.image.color = new Color(0.4f, 0.4f, 0.4f); // Серая кнопка во время ожидания
+        }
+    }
+
+    /// <summary>
+    /// Срабатывает при нажатии на кнопку игроком
+    /// </summary>
+    private void OnEndTurnClicked()
+    {
+        if (!isMyTurn) return;
+
+        // Мгновенно выключаем кнопку, защищаясь от спам-кликов
+        endTurnButton.interactable = false;
+        buttonText.text = "ОТПРАВКА...";
+
+        // Запускаем сетевой веб-запрос к серверу Go
+        StartCoroutine(SendEndTurnRequest());
+    }
+
+    IEnumerator SendEndTurnRequest()
+    {
+        EndTurnPayload payload = new EndTurnPayload 
+        { 
+            match_id = currentMatchID, 
+            player_id = localPlayerID 
+        };
+        
+        string json = JsonUtility.ToJson(payload);
+
+        using (UnityWebRequest request = new UnityWebRequest(serverUrlEndTurn, "POST"))
+        {
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                Debug.Log("✅ Сервер Go подтвердил переключение хода.");
+                // Переводим интерфейс в состояние ожидания хода противника
+                SetTurnState(false, 0, 0); 
+            }
+            else
+            {
+                Debug.LogError("❌ Ошибка при попытке завершить ход: " + request.error);
+                // Если сервер вернул ошибку (например, время вышло или чит-проверка не прошла),
+                // возвращаем кнопку в активное состояние
+                SetTurnState(true, 4, 4); 
+            }
+        }
+    }
+}

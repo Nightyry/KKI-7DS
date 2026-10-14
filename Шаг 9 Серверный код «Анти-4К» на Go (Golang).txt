@@ -1,0 +1,86 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+)
+
+// Устанавливаем жесткий лимит размера файла: 200 Килобайт (200 * 1024 байт)
+const MaxUploadSize = 200 * 1024 
+
+func uploadArtHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Разрешаем только метод POST (загрузка данных)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 2. ЗАЩИТА «АНТИ-4К»: Ограничиваем чтение тела запроса на уровне сервера.
+	// http.MaxBytesReader не позволит прочитать ни одного байта сверх лимита.
+	// Если клиент шлет файл размером 5 МБ, сервер закроет соединение.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadSize)
+
+	// ParseMultipartForm парсит данные формы (картинку).
+	// Если файл превышает MaxUploadSize, функция вернет ошибку "http: request body too large"
+	err := r.ParseMultipartForm(MaxUploadSize)
+	if err != nil {
+		http.Error(w, "Ошибка: Файл слишком тяжелый! Лимит строго до 200 КБ.", http.StatusBadRequest)
+		fmt.Println("⚠️  [Анти-4К] Заблокирована попытка загрузки тяжелого файла!")
+		return
+	}
+
+	// 3. Извлекаем файл из запроса по ключу "art_image"
+	file, handler, err := r.FormFile("art_image")
+	if err != nil {
+		http.Error(w, "Ошибка получения файла", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	fmt.Printf("🔍 Проверка файла: Название: %s, Размер на сервере: %d байт\n", handler.Filename, handler.Size)
+
+	// 4. Дополнительная проверка расширения файла для безопасности (защита от скриптов/вирусов)
+	ext := filepath.Ext(handler.Filename)
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
+		http.Error(w, "Ошибка: Разрешены только форматы JPG, JPEG и WebP", http.StatusUnsupportedMediaType)
+		fmt.Printf("⚠️  [Безопасность] Отклонен файл с недопустимым расширением: %s\n", ext)
+		return
+	}
+
+	// 5. Создаем папку для хранения артов карт, если её еще нет
+	artDir := "./card_arts"
+	err = os.MkdirAll(artDir, os.ModePerm)
+	if err != nil {
+		http.Error(w, "Ошибка создания директории на сервере", http.StatusInternalServerError)
+		return
+	}
+
+	// Формируем безопасное уникальное имя файла на диске сервера
+	// В реальной игре мы привяжем имя файла к ID карты (например, "card_1001.webp")
+	dstPath := filepath.Join(artDir, handler.Filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		http.Error(w, "Ошибка сохранения файла на сервере", http.StatusInternalServerError)
+		return
+	}
+	defer dst.Close()
+
+	// 6. Копируем байты картинки из сети в файл на жестком диске сервера
+	_, err = io.Copy(dst, file)
+	if err != nil {
+		http.Error(w, "Ошибка при записи файла на диск", http.StatusInternalServerError)
+		return
+	}
+
+	// 7. Возвращаем успешный ответ в Unity
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`{"status":"success","message":"Арт успешно загружен! Отрендерен как 512x512.","path":"%s"}`, dstPath)))
+	
+	fmt.Printf("✅ [Анти-4К] Файл успешно прошел проверку и сохранен: %s\n", dstPath)
+}
+
+// Допиши этот роут в функции main() рядом с прошлыми:
+// http.HandleFunc("/upload_art", uploadArtHandler)

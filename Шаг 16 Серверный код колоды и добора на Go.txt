@@ -1,0 +1,99 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/http"
+)
+
+// Обновляем состояние игры из Шага 13, добавляя колоды, руки и счетчик Усталости
+type AdvancedGameState struct {
+	MatchID         string   `json:"match_id"`
+	ActivePlayer    string   `json:"active_player"`
+	OpponentPlayer  string   `json:"opponent_player"`
+	
+	// Скрытые на сервере колоды (массивы ID карт)
+	Player1Deck     []int    `json:"-"` 
+	Player2Deck     []int    `json:"-"`
+	
+	// Количество карт в колоде (открытая информация для Unity)
+	P1DeckCount     int      `json:"p1_deck_count"`
+	P2DeckCount     int      `json:"p2_deck_count"`
+
+	// Каунтеры урона от усталости ("Кара"), если колода закончилась
+	P1FatigueDamage int      `json:"-"`
+	P2FatigueDamage int      `json:"-"`
+}
+
+// Функция безопасного перемешивания колоды (Криптографический рандом)
+func ShuffleDeck(deck []int) []int {
+	shuffled := make([]int, len(deck))
+	copy(shuffled, deck)
+	
+	for i := len(shuffled) - 1; i > 0; i-- {
+		nBig, _ := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		j := int(nBig.Int64())
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+	return shuffled
+}
+
+// Главная функция добора карты (Серверный Draw)
+func DrawCard(state *AdvancedGameState, playerID string) (int, string) {
+	var deck *[]int
+	var fatigue *int
+	var deckCount *int
+
+	// Определяем, чью колоду мы сейчас модифицируем
+	if playerID == "Player_1_ID" { // В реальном коде сверка идет по state.Player1ID
+		deck = &state.Player1Deck
+		fatigue = &state.P1FatigueDamage
+		deckCount = &state.P1DeckCount
+	} else {
+		deck = &state.Player2Deck
+		fatigue = &state.P2FatigueDamage
+		deckCount = &state.P2DeckCount
+	}
+
+	// ЛОГИКА «КАРЫ» (Усталость при пустой колоде)
+	if len(*deck) == 0 {
+		*fatigue++
+		fmt.Printf("💀 [КАРА] У игрока %s закончилась колода! Нанесено %d урона усталости.\n", playerID, *fatigue)
+		return 0, fmt.Sprintf("fatigue_%d", *fatigue)
+	}
+
+	// Берем верхнюю карту (первый элемент массива)
+	drawnCardID := (*deck)[0]
+	
+	// Удаляем карту из колоды на сервере
+	*deck = (*deck)[1:]
+	*deckCount = len(*deck)
+
+	fmt.Printf("🎴 Игрок %s успешно доставил карту ID: %d. Осталось в колоде: %d\n", playerID, drawnCardID, *deckCount)
+	return drawnCardID, "success"
+}
+
+// Сетевой обработчик начала хода для Unity (HTTP GET/POST)
+func startTurnRequest(w http.ResponseWriter, r *http.Request) {
+	// Имитация извлечения текущей сессии матча
+	mockState := &AdvancedGameState{
+		MatchID:      "match_777",
+		ActivePlayer: "Player_1_ID",
+		Player1Deck:  []int{1, 2, 1, 3, 2}, // Тестовая колода из ID наших карт
+		P1DeckCount:  5,
+	}
+
+	// Вызываем добор карты для активного игрока
+	cardID, status := DrawCard(mockState, mockState.ActivePlayer)
+
+	w.Header().Set("Content-Type", "application/json")
+	if status == "success" {
+		// Сервер отдает Unity строго ОДИН ID карты, который игроку положено взять в руку
+		w.Write([]byte(fmt.Sprintf(`{"status":"draw","card_id":%d,"cards_left":%d}`, cardID, mockState.P1DeckCount)))
+	} else {
+		// Если колода пуста — шлем команду нанести урон усталости на экране
+		w.Write([]byte(fmt.Sprintf(`{"status":"fatigue","damage":%d}`, mockState.P1FatigueDamage)))
+	}
+}

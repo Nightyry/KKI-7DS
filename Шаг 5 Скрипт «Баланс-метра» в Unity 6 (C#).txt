@@ -1,0 +1,76 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+public class BalanceMeter : MonoBehaviour
+{
+    [Header("UI Элементы Индикатора")]
+    public Image meterColorImage;        // Круглый или полосой индикатор (Зеленый/Желтый/Красный)
+    public TextMeshProUGUI statusText;   // Текст: "Идеально", "Сомнительно", "Имба! Слишком сильно"
+    public TextMeshProUGUI scoreText;    // Текст с цифрами (например: "Дефицит: -2" или "Перебор: +4")
+
+    // Перечисление возможных статусов баланса
+    public enum BalanceStatus { Perfect, Questionable, Overpowered }
+
+    /// <summary>
+    /// Главная функция расчета баланса. Вызывается каждый раз, когда игрок меняет параметры карты в UI.
+    /// </summary>
+    /// <param name="mana">Текущая мана карты</param>
+    /// <param name="attack">Текущая атака</param>
+    /// <param name="health">Текущее здоровье</param>
+    /// <param name="hasTaunt">Включена ли Провокация</param>
+    /// <param name="debtValue">Размер Долга по мане (0 если нет)</param>
+    public void UpdateBalance(int mana, int attack, int health, bool hasTaunt, int debtValue)
+    {
+        // 1. Считаем "Базовый бюджет" карты для её стоимости маны
+        // На 0 маны бюджет = 2 очка стат (1/1). На 1 мане = 3 очка (2/1 или 1/2) и так далее.
+        int allowedBudget = (mana * 2) + 1;
+        if (mana == 0) allowedBudget = 2; 
+
+        // 2. Считаем реальную "стоимость" того, что накрутил игрок
+        int currentWeight = attack + health;
+
+        // Добавляем вес за положительные свойства
+        if (hasTaunt) 
+        {
+            currentWeight += 1; // Провокация "стоит" примерно 1 очко характеристик
+        }
+
+        // Вычитаем вес за негативные свойства (Классовая фишка Алчности!)
+        // Долг разгружает карту, позволяя дать ей больше статов на текущем ходу
+        currentWeight -= (debtValue * 2); 
+
+        // 3. Сравниваем бюджет и получившийся вес
+        int balanceDeviation = currentWeight - allowedBudget;
+
+        // 4. Окрашиваем индикатор на основе отклонения от нормы
+        if (balanceDeviation <= 0)
+        {
+            // Вес карты меньше или равен норме (Карта честная или даже слабая)
+            SetMeterState(BalanceStatus.Perfect, "Идеальный баланс", Color.green, balanceDeviation);
+        }
+        else if (balanceDeviation > 0 && balanceDeviation <= 2)
+        {
+            // Небольшой перебор (в пределах 1-2 стат). Допустимо, но требует пристального внимания игроков на голосовании
+            SetMeterState(BalanceStatus.Questionable, "Высокая сила", Color.yellow, balanceDeviation);
+        }
+        else
+        {
+            // Жесткий перебор бюджета (Имба). Такую карту нельзя отправить на сервер
+            SetMeterState(BalanceStatus.Overpowered, "ИМБА! Слишком сильно", Color.red, balanceDeviation);
+        }
+    }
+
+    private void SetMeterState(BalanceStatus status, string message, Color color, int deviation)
+    {
+        meterColorImage.color = color;
+        statusText.text = message;
+        
+        if (deviation > 0)
+            scoreText.text = $"+{deviation} к силе";
+        else if (deviation < 0)
+            scoreText.text = $"{deviation} (Слабая)";
+        else
+            scoreText.text = "0 (Эталон)";
+    }
+}

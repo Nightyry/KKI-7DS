@@ -1,0 +1,53 @@
+package main
+
+import "fmt"
+
+// Наша база данных в памяти сервера
+var CardDatabase = make(map[int]Card)
+
+func InitDatabase() {
+    // 1. Внеклассовая (Нейтральная) карта за 2 маны
+    CardDatabase[1] = Card{
+        ID:          1,
+        Name:        "Глиняный голем",
+        ManaCost:    2,
+        Type:        Minion,
+        Class:       Neutral,
+        Rarity:      Common,
+        Attack:      2,
+        Health:      3,
+        Description: "Обычное существо без эффектов.",
+    }
+
+    // 2. Карта Алчности за 1 ману
+    CardDatabase[2] = Card{
+        ID:          2,
+        Name:        "Дьявольский заём",
+        ManaCost:    1,
+        Type:        Spell,
+        Class:       Greed,
+        Rarity:      Common,
+        Attack:      0,
+        Health:      0,
+        Description: "Вы получаете 2 маны на этом ходу. На следующем ходу вы получите Долг: 2 маны.",
+    }
+
+    // 3. Карта Зависти за 1 ману
+    CardDatabase[3] = Card{
+        ID:          3,
+        Name:        "Острый взгляд",
+        ManaCost:    1,
+        Type:        Spell,
+        Class:       Envy,
+        Rarity:      Common,
+        Attack:      0,
+        Health:      0,
+        Description: "Посмотрите 3 верхние карты вашей колоды. Положите одну в руку, остальные — в низ колоды.",
+    }
+
+    fmt.Printf("База данных успешно запущена! Загружено карт: %d\n", len(CardDatabase))
+}
+
+func main() {
+    InitDatabase()
+}

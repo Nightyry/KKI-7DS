@@ -1,0 +1,154 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
+// Состояние конкретного матча в памяти сервера
+type GameState struct {
+	MatchID       string    `json:"match_id"`
+	ActivePlayer  string    `json:"active_player"`  // ID игрока, чей сейчас ход
+	OpponentPlayer string   `json:"opponent_player"`// ID второго игрока
+	TurnNumber    int       `json:"turn_number"`    // Номер текущего хода
+	Player1Mana   int       `json:"player1_mana"`   // Текущая доступная мана Игрока 1
+	Player2Mana   int       `json:"player2_mana"`   // Текущая доступная мана Игрока 2
+	MaxMana       int       `json:"max_mana"`       // Максимум маны на этом ходу (растет до 10)
+	TurnEndTime   time.Time `json:"turn_end_time"`  // Время, когда ход принудительно завершится
+}
+
+var (
+	gameMutex   sync.Mutex
+	ActiveGames = make(map[string]*GameState) // Хранилище запущенных игр
+)
+
+// Длительность одного хода в секундах
+const TurnDuration = 75 * time.Second 
+
+// Функция инициализации матча (вызывается из матчмейкера Шага 11)
+func StartNewGame(matchID, player1, player2 string) {
+	gameMutex.Lock()
+	defer gameMutex.Unlock()
+
+	// Первый ход определяется монеткой (случайно)
+	active := player1
+	opponent := player2
+	if time.Now().UnixNano()%2 == 0 {
+		active = player2
+		opponent = player1
+	}
+
+	state := &GameState{
+		MatchID:        matchID,
+		ActivePlayer:   active,
+		OpponentPlayer: opponent,
+		TurnNumber:     1,
+		Player1Mana:    1, // Стартуем строго с 1 маны
+		Player2Mana:    0,
+		MaxMana:        1,
+		TurnEndTime:    time.Now().Add(TurnDuration),
+	}
+
+	ActiveGames[matchID] = state
+	
+	// Запускаем фоновый таймер для этого конкретного хода
+	go WatchdogTurnTimer(matchID, state.TurnNumber)
+
+	fmt.Printf("🎮 Игра %s запущена! Первым ходит: %s, Мана: 1/1\n", matchID, active)
+}
+
+// Фоновый таймер. Если игрок уснул — сервер переключит ход сам
+func WatchdogTurnTimer(matchID string, turnNum int) {
+	time.Sleep(TurnDuration)
+
+	gameMutex.Lock()
+	state, exists := ActiveGames[matchID]
+	// Проверяем, существует ли еще игра и не переключил ли игрок ход сам досрочно
+	if exists && state.TurnNumber == turnNum {
+		gameMutex.Unlock()
+		SwitchTurn(matchID)
+	} else {
+		gameMutex.Unlock()
+	}
+}
+
+// Функция принудительного или добровольного переключения хода
+func SwitchTurn(matchID string) {
+	gameMutex.Lock()
+	state, exists := ActiveGames[matchID]
+	if !exists {
+		gameMutex.Unlock()
+		return
+	}
+
+	// Меняем игроков местами
+	state.ActivePlayer, state.OpponentPlayer = state.OpponentPlayer, state.ActivePlayer
+	state.TurnNumber++
+
+	// Логика роста маны: максимум увеличивается каждый раунд (две смены хода = один полный раунд)
+	if state.TurnNumber%2 == 1 {
+		if state.MaxMana < 10 {
+			state.MaxMana++ // Растет максимум до 10 маны
+		}
+	}
+
+	// Восстанавливаем ману активному игроку
+	state.Player1Mana = state.MaxMana
+	state.Player2Mana = state.MaxMana
+	state.TurnEndTime = time.Now().Add(TurnDuration)
+
+	// Запускаем таймер для нового хода
+	go WatchdogTurnTimer(matchID, state.TurnNumber)
+
+	fmt.Printf("🔄 В матче %s ход перешел к %s. Раунд: %d, Мана восстановлена до: %d\n", 
+		matchID, state.ActivePlayer, state.TurnNumber, state.MaxMana)
+	
+	gameMutex.Unlock()
+}
+
+// Сетевой обработчик запроса от Unity на завершение хода (HTTP POST)
+func endTurnHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		MatchID  string `json:"match_id"`
+		PlayerID string `json:"player_id"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Ошибка данных", http.StatusBadRequest)
+		return
+	}
+
+	gameMutex.Lock()
+	state, exists := ActiveGames[req.MatchID]
+	if !exists {
+		gameMutex.Unlock()
+		http.Error(w, "Матч не найден", http.StatusNotFound)
+		return
+	}
+
+	// ЖЕСТКАЯ ПРОВЕРКА БЕЗОПАСНОСТИ: Может ли этот игрок сейчас кликать кнопку?
+	if state.ActivePlayer != req.PlayerID {
+		gameMutex.Unlock()
+		http.Error(w, "Запрещено: Сейчас ход вашего оппонента!", http.StatusForbidden)
+		return
+	}
+	gameMutex.Unlock()
+
+	// Если проверку прошли — переключаем ход
+	SwitchTurn(req.MatchID)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"turn_switched"}`))
+}
+
+// Зарегистрируй роут в main():
+// http.HandleFunc("/end_turn", endTurnHandler)

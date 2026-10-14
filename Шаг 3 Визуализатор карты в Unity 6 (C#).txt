@@ -1,0 +1,68 @@
+using UnityEngine;
+using TMPro; // Используем продвинутый текст Unity для красивых шрифтов
+using UnityEngine.UI;
+
+public class CardVisualizer : MonoBehaviour
+{
+    [Header("UI Элементы Карты")]
+    public TextMeshProUGUI nameText;         // Название карты
+    public TextMeshProUGUI manaText;         // Стоимость маны
+    public TextMeshProUGUI descriptionText;  // Текст эффекта
+    public TextMeshProUGUI attackText;       // Сила атаки
+    public TextMeshProUGUI healthText;       // Здоровье
+    
+    [Header("Компоненты Визуала")]
+    public Image cardFrameImage;   // Картинка рамки карты (меняет цвет)
+    public Image cardArtImage;     // Сжатый арт игрока (из Мастерской)
+    public GameObject statsPanel;  // Панель со статами (скрывается, если это заклинание)
+
+    // Эта структура полностью дублирует данные, которые присылает Go-сервер
+    [System.Serializable]
+    public struct CardData
+    {
+        public int id;
+        public string name;
+        public int mana_cost;
+        public string type;       // "Minion" или "Spell"
+        public string cardClass;  // "Neutral", "Greed", "Envy"
+        public string rarity;
+        public int attack;
+        public int health;
+        public string description;
+    }
+
+    // Главная функция, которая "оживляет" карту на экране
+    public void SetupCard(CardData data)
+    {
+        // 1. Заполняем тексты
+        nameText.text = data.name;
+        manaText.text = data.mana_cost.ToString();
+        descriptionText.text = data.description;
+
+        // 2. Если это Заклинание (Spell) — скрываем статы атаки и здоровья
+        if (data.type == "Spell")
+        {
+            statsPanel.SetActive(false); // Прячем панель Атаки/ХП
+        }
+        else // Если существо (Minion) — включаем и заполняем
+        {
+            statsPanel.SetActive(true);
+            attackText.text = data.attack.ToString();
+            healthText.text = data.health.ToString();
+        }
+
+        // 3. Стилизация рамки под конкретный Грех (Атмосфера игры)
+        switch (data.cardClass)
+        {
+            case "Greed": // Алчность — красим рамку в роскошный золотой цвет
+                cardFrameImage.color = new Color(0.85f, 0.65f, 0.12f); 
+                break;
+            case "Envy":  // Зависть — красим в ядовито-зеленый полумрак
+                cardFrameImage.color = new Color(0.1f, 0.4f, 0.1f); 
+                break;
+            default:      // Нейтральные — обычный серый каменный цвет
+                cardFrameImage.color = new Color(0.5f, 0.5f, 0.5f); 
+                break;
+        }
+    }
+}

@@ -1,0 +1,94 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+public class CardConstructorUI : MonoBehaviour
+{
+    [Header("Ссылки на другие системы")]
+    public CardVisualizer cardVisualizer; // Скрипт карты на экране (Шаг 3)
+    public BalanceMeter balanceMeter;     // Скрипт Баланс-метра (Шаг 5)
+
+    [Header("Элементы ввода игрока (UI)")]
+    public TMP_InputField nameInputField; // Поле ввода имени карты
+    public Slider manaSlider;             // Ползунок стоимости маны (0-10)
+    public Slider attackSlider;           // Ползунок атаки (0-10)
+    public Slider healthSlider;           // Ползунок здоровья (1-11)
+    
+    [Header("Элементы эффектов (UI)")]
+    public Toggle tauntToggle;            // Галочка "Провокация"
+    public TMP_Dropdown classDropdown;    // Выбор класса (Нейтральная, Алчность, Зависть)
+    public Slider debtSlider;             // Ползунок "Долга по мане" (0-5)
+
+    [Header("Кнопка отправки")]
+    public Button submitButton;           // Кнопка "Создать карту"
+
+    private void Start()
+    {
+        // Подписываемся на изменения всех ползунков и полей ввода.
+        // Как только игрок что-то тронет, автоматически сработает функция OnCardDataChanged.
+        nameInputField.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        manaSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        attackSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        healthSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        
+        tauntToggle.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        classDropdown.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        debtSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+
+        // Первая инициализация при открытии экрана
+        OnCardDataChanged();
+    }
+
+    /// <summary>
+    /// Функция, которая срабатывает на лету при любом действии игрока в конструкторе
+    /// </summary>
+    public void OnCardDataChanged()
+    {
+        // 1. Собираем данные из ползунков в структуру карты
+        CardVisualizer.CardData currentData = new CardVisualizer.CardData();
+        
+        currentData.name = string.IsNullOrEmpty(nameInputField.text) ? "Назовите карту..." : nameInputField.text;
+        currentData.mana_cost = (int)manaSlider.value;
+        currentData.attack = (int)attackSlider.value;
+        currentData.health = (int)healthSlider.value;
+        currentData.type = "Minion"; // В прототипе собираем существ
+
+        // Определяем класс из выпадающего списка
+        switch (classDropdown.value)
+        {
+            case 1: currentData.cardClass = "Greed"; break; // Алчность
+            case 2: currentData.cardClass = "Envy"; break;  // Зависть
+            default: currentData.cardClass = "Neutral"; break; // Нейтральная
+        }
+
+        // Формируем текст описания на основе галочек и ползунков эффектов
+        string desc = "";
+        if (tauntToggle.isOn) desc += "[Провокация] ";
+        if (debtSlider.value > 0) desc += $"[Долг: {(int)debtSlider.value} маны] на следующем ходу.";
+        currentData.description = string.IsNullOrEmpty(desc) ? "Без эффектов" : desc;
+
+        // 2. Отправляем обновленные данные в визуализатор (Карта на экране перерисовывается)
+        cardVisualizer.SetupCard(currentData);
+
+        // 3. Отправляем данные в Баланс-метр для оценки
+        balanceMeter.UpdateBalance(
+            currentData.mana_cost,
+            currentData.attack,
+            currentData.health,
+            tauntToggle.isOn,
+            (int)debtSlider.value
+        );
+
+        // 4. Проверяем статус Баланс-метра. Если это "ИМБА" (красный цвет), блокируем кнопку отправки!
+        if (balanceMeter.statusText.text.Contains("ИМБА"))
+        {
+            submitButton.interactable = false; // Игрок не сможет нажать кнопку
+        }
+        else
+        {
+            submitButton.interactable = true;  // Карта сбалансирована, отправка разрешена
+        }
+    }
+}
+
+Как настроить это в редакторе Unity (на пальцах):На сцене Мастерской создаешь пустые ползунки (Sliders) для Маны, Атаки, Здоровья и Долга.Создаешь галочку (Toggle) для Провокации и текстовое поле (InputField) для имени.Перетаскиваешь этот скрипт CardConstructorUI на объект Canvas.В пустые слоты скрипта в инспекторе перетаскиваешь соответствующие ползунки и скрипты карты/баланс-метра.

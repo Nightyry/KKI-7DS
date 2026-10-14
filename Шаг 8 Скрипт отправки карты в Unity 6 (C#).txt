@@ -1,0 +1,142 @@
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+using UnityEngine.Networking; // Необходим для отправки данных по сети
+using System.Collections;
+
+public class CardConstructorUI : MonoBehaviour
+{
+    [Header("Ссылки на другие системы")]
+    public CardVisualizer cardVisualizer; 
+    public BalanceMeter balanceMeter;     
+
+    [Header("Элементы ввода игрока (UI)")]
+    public TMP_InputField nameInputField; 
+    public Slider manaSlider;             
+    public Slider attackSlider;           
+    public Slider healthSlider;           
+    
+    [Header("Элементы эффектов (UI)")]
+    public Toggle tauntToggle;            
+    public TMP_Dropdown classDropdown;    
+    public Slider debtSlider;             
+
+    [Header("Кнопка отправки")]
+    public Button submitButton;           
+
+    private void Start()
+    {
+        nameInputField.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        manaSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        attackSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        healthSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        
+        tauntToggle.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        classDropdown.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+        debtSlider.onValueChanged.AddListener(delegate { OnCardDataChanged(); });
+
+        // НАЗНАЧАЕМ ДЕЙСТВИЕ НА КНОПКУ: При нажатии вызывается функция SubmitCardToServer
+        submitButton.onClick.AddListener(SubmitCardToServer);
+
+        OnCardDataChanged();
+    }
+
+    public void OnCardDataChanged()
+    {
+        CardVisualizer.CardData currentData = GetCurrentCardData();
+
+        cardVisualizer.SetupCard(currentData);
+
+        balanceMeter.UpdateBalance(
+            currentData.mana_cost,
+            currentData.attack,
+            currentData.health,
+            tauntToggle.isOn,
+            (int)debtSlider.value
+        );
+
+        // Если Баланс-метр горит красным (ИМБА) — блокируем кнопку
+        if (balanceMeter.statusText.text.Contains("ИМБА"))
+        {
+            submitButton.interactable = false;
+        }
+        else
+        {
+            submitButton.interactable = true;
+        }
+    }
+
+    // Вспомогательная функция для сборки данных с экрана в одну структуру
+    private CardVisualizer.CardData GetCurrentCardData()
+    {
+        CardVisualizer.CardData data = new CardVisualizer.CardData();
+        data.name = string.IsNullOrEmpty(nameInputField.text) ? "Безымянный Грех" : nameInputField.text;
+        data.mana_cost = (int)manaSlider.value;
+        data.attack = (int)attackSlider.value;
+        data.health = (int)healthSlider.value;
+        data.type = "Minion";
+
+        switch (classDropdown.value)
+        {
+            case 1: data.cardClass = "Greed"; break;
+            case 2: data.cardClass = "Envy"; break;
+            default: data.cardClass = "Neutral"; break;
+        }
+
+        string desc = "";
+        if (tauntToggle.isOn) desc += "[Провокация] ";
+        if (debtSlider.value > 0) desc += $"[Долг: {(int)debtSlider.value} маны] ";
+        data.description = string.IsNullOrEmpty(desc) ? "Без эффектов" : desc;
+
+        return data;
+    }
+
+    // Функция-триггер для запуска сетевой корутины
+    public void SubmitCardToServer()
+    {
+        StartCoroutine(SendCardPostRequest());
+    }
+
+    // Сетевой веб-запрос на сервер Go
+    IEnumerator SendCardPostRequest()
+    {
+        string url = "http://localhost:8080/createcard";
+
+        // Получаем структуру данных текущей карты и превращаем её в JSON-текст
+        CardVisualizer.CardData cardToSend = GetCurrentCardData();
+        string jsonPayload = JsonUtility.ToJson(cardToSend);
+
+        // Создаем пустой POST-запрос
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            // Переводим текст в байты для отправки по сети
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(jsonPayload);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            
+            // Указываем заголовки, что отправляем именно JSON-данные
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            // Отключаем кнопку на время отправки, чтобы игрок не спамил кликами
+            submitButton.interactable = false;
+
+            // Отправляем и ждем ответа сервера
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.ConnectionError || request.result == UnityWebRequest.Result.ProtocolError)
+            {
+                Debug.LogError("Ошибка отправки на сервер Go: " + request.error);
+                // Если произошла ошибка, выводим её в консоль
+            }
+            else
+            {
+                // Карта успешно улетела и записалась в файл user_cards.json!
+                Debug.Log("Ответ от Go-сервера: " + request.downloadHandler.text);
+                
+                // Очищаем текстовое поле ввода после успешного создания
+                nameInputField.text = "";
+                OnCardDataChanged();
+            }
+        }
+    }
+}

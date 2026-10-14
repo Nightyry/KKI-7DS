@@ -1,0 +1,80 @@
+using UnityEngine;
+using UnityEngine.Networking;
+using System.Collections;
+using System.IO;
+
+public class ArtUploader : MonoBehaviour
+{
+    // Адрес нашего сервера Go для загрузки картинок
+    private string uploadUrl = "http://localhost:8080/upload_art";
+
+    /// <summary>
+    /// Главная функция: принимает исходную картинку, сжимает её и запускает отправку
+    /// </summary>
+    /// <param name="originalTexture">Текстура, которую выбрал игрок</param>
+    public void PrepareAndUploadArt(Texture2D originalTexture)
+    {
+        // 1. Сжатие «Анти-4К»: принудительно уменьшаем разрешение до 512x512
+        Texture2D resizedTexture = ResizeTexture(originalTexture, 512, 512);
+
+        // 2. Превращаем сжатую текстуру в массив байтов формата JPG
+        // Этим мы гарантируем, что вес файла будет минимальным (обычно до 100 КБ)
+        byte[] imageBytes = resizedTexture.EncodeToJPG(85); // 85 — качество сжатия
+
+        // Уничтожаем временную текстуру из памяти Unity, чтобы не было утечек
+        Destroy(resizedTexture);
+
+        // 3. Запускаем отправку файла по сети
+        StartCoroutine(UploadArtCoroutine(imageBytes));
+    }
+
+    /// <summary>
+    /// Функция изменения разрешения картинки на уровне пикселей
+    /// </summary>
+    private Texture2D ResizeTexture(Texture2D source, int targetWidth, int targetHeight)
+    {
+        RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight);
+        RenderTexture.active = rt;
+        
+        // Копируем исходную картинку в новый маленький размер
+        Graphics.Blit(source, rt);
+        
+        Texture2D result = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
+        result.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+        result.Apply();
+        
+        RenderTexture.active = null;
+        RenderTexture.ReleaseTemporary(rt);
+        return result;
+    }
+
+    /// <summary>
+    /// Сетевой запрос, передающий байты картинки на Go-сервер
+    /// </summary>
+    IEnumerator UploadArtCoroutine(byte[] bytes)
+    {
+        // Создаем Multipart-форму (стандартный формат передачи файлов в интернете)
+        WWWForm form = new WWWForm();
+        
+        // Добавляем наши байты в форму. 
+        // Ключ "art_image" строго совпадает с тем, что ждет сервер Go в r.FormFile!
+        form.AddBinaryData("art_image", bytes, "user_card_art.jpg", "image/jpeg");
+
+        using (UnityWebRequest wreq = UnityWebRequest.Post(uploadUrl, form))
+        {
+            Debug.Log("🚀 Отправка сжатого арта на сервер...");
+            yield return wreq.SendWebRequest();
+
+            if (wreq.result == UnityWebRequest.Result.ConnectionError || wreq.result == UnityWebRequest.Result.ProtocolError)
+            {
+                // Если сервер Go сбросил соединение (например, если файл превысил 200 КБ), Unity покажет ошибку
+                Debug.LogError("❌ Ошибка загрузки арта: " + wreq.downloadHandler.text);
+            }
+            else
+            {
+                // Сервер успешно принял файл!
+                Debug.Log("✅ Ответ сервера: " + wreq.downloadHandler.text);
+            }
+        }
+    }
+}
